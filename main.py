@@ -15,9 +15,7 @@ class Client:
         service = Service(executable_path="./driver/chromedriver")
         options = Options()
         options.add_argument("--headless")
-        caps = DesiredCapabilities()
-        caps['pageLoadStrategy'] = 'eager'
-        driver = webdriver.Chrome(service=service, options=options, desired_capabilities=caps)
+        driver = webdriver.Chrome(service=service, options=options)
         driver.get(url)
 
         try:
@@ -96,17 +94,16 @@ def main():
     PAGES_WITH_ARTICLES = Queue() # список ссылок статей
     ARTICLE_DATA = Queue() # список данных
     
-    thread_getLinks = threading.Thread(
-        target=get_links, args=(PAGES_WITH_ARTICLES))
+    with open('./source/pravoslavie.txt', 'r') as f:
+        for line in f.readlines():
+            line = line.replace('\n', '')
+            PAGES_WITH_ARTICLES.put_nowait(line.replace('\\n', ''))
+        f.close()
 
     thread_data = threading.Thread(
         target=get_article_data, args=(PAGES_WITH_ARTICLES, ARTICLE_DATA))
     
-    
-    thread_getLinks.run()
     thread_data.run()
-
-    thread_getLinks.join()
     thread_data.join()
 
     with open('./output/dump.csv', 'a', newline='') as f:
@@ -138,3 +135,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print('Программа завершена')
