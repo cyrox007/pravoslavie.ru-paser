@@ -102,11 +102,7 @@ def main():
             PAGES_WITH_ARTICLES.put_nowait(line.replace('\\n', ''))
         f.close()
 
-    thread_data = threading.Thread(
-        target=get_article_data, args=(PAGES_WITH_ARTICLES, ARTICLE_DATA))
-    
-    thread_data.run()
-    thread_data.join()
+    get_article_data(PAGES_WITH_ARTICLES, ARTICLE_DATA)
 
     with open('./output/dump.csv', 'a', newline='') as f:
         print('Запись в файл')
