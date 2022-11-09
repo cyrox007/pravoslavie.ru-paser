@@ -1,6 +1,5 @@
-import time, random, requests, threading
+import threading
 from asyncio import Queue
-from bs4 import BeautifulSoup
 import alive_progress
 import csv
 
@@ -67,89 +66,12 @@ def refinde(str):
     return s.replace('&nbsp;', ' ')
 
 
-def generate_urls(url, LINKS: Queue):
-    print('Генерируем список страниц со статьями')
-    for i in range(17, 0, -1):
-        link: str = url + 'page' + str(i) + '_1079.htm'
-        LINKS.put_nowait(link)
-    print('Генерация завершена')
-
-
-def get_html(link):
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0",
-        "Mozilla/5.0 (Windows NT 10.0; rv:78.0) Gecko/20100101 Firefox/78.0",
-        "Mozilla/5.0 (X11; Linux x86_64; rv:95.0) Gecko/20100101 Firefox/95.0"
-    ]
-    random_user_agent = random.choice(user_agents)
-    headers = {
-            'User-Agent': random_user_agent
-        }
-    response = requests.get(link, headers=headers)
-    if response.status_code == 200:
-        return response.text 
-    
-    return 404
-    
-    
-def get_article_link(articles, PAGES_WITH_ARTICLES: Queue):
-    for article in articles:
-        link = 'http://www.pravoslavie.ru' + article.find('a').get('href')
-        PAGES_WITH_ARTICLES.put_nowait(link)
-
-
-def get_pages_with_articles(LINKS: Queue, PAGES_WITH_ARTICLES: Queue):
-    count = LINKS.qsize()
-    with alive_progress.alive_bar(count) as bar:
-        print('Получаем сслыки на статьи')
-        for i in range(count):
-            while LINKS.empty():
-                time.sleep(0.5)
-            link = LINKS.get_nowait()
-            html = get_html(link)
-            if html == 404:
-                continue
-            soup = BeautifulSoup(html, 'lxml')
-            articles = soup.find('div', class_='list_articles').find_all('div', class_='item')
-            get_article_link(articles, PAGES_WITH_ARTICLES)
-            bar()
-
-
-def dowload_articles(link, ARTICLE_HTML: Queue):
-    html = get_html(link)
-    if html != 404:
-        ARTICLE_HTML.put_nowait({
-            'link': link,
-            'html': html
-            })
-
-
-def download_article_selenium(link):
-    return Client.get_data(link)
-
-
-def loading(PAGES_WITH_ARTICLES: Queue, ARTICLE_HTML: Queue):
-    print('Загрузка')
-    with alive_progress.alive_bar(PAGES_WITH_ARTICLES.qsize()) as bar:
-        for i in range(PAGES_WITH_ARTICLES.qsize()):
-            while PAGES_WITH_ARTICLES.empty():
-                time.sleep(0.2)
-            if i != 0 and i % 100 == 0:
-                time.sleep(10)
-            link = PAGES_WITH_ARTICLES.get_nowait()
-            dowload_articles(link, ARTICLE_HTML)
-            time.sleep(0.5)
-            bar()
-
-
-def get_data(ARTICLE_HTML: Queue, ARTICLE_DATA: Queue):
-    print('Собираем данные')
-    with alive_progress.alive_bar(ARTICLE_HTML.qsize()) as bar:
-        for i in range(ARTICLE_HTML.qsize()):
-            while ARTICLE_HTML.empty():
-                time.sleep(0.2)
-            get_article_data(i+1, ARTICLE_HTML.get_nowait(), ARTICLE_DATA)
-            bar()
+def get_links(PAGES_WITH_ARTICLES: Queue):
+    with open('./source/pravoslavie.txt', 'r') as f:
+        for line in f.readlines():
+            line = line.replace('\n', '')
+            PAGES_WITH_ARTICLES.put_nowait(line.replace('\\n', ''))
+        f.close()
 
 
 def get_article_data(PAGES_WITH_ARTICLES: Queue, ARTICLE_DATA: Queue):
@@ -157,7 +79,7 @@ def get_article_data(PAGES_WITH_ARTICLES: Queue, ARTICLE_DATA: Queue):
     with alive_progress.alive_bar(PAGES_WITH_ARTICLES.qsize()) as bar:
         for i in range(PAGES_WITH_ARTICLES.qsize()):
             link = PAGES_WITH_ARTICLES.get_nowait()
-            load_data = download_article_selenium(link)
+            load_data = Client.get_data(link)
             ARTICLE_DATA.put_nowait({
                 'number': i+1,
                 'link': link,
@@ -171,30 +93,22 @@ def get_article_data(PAGES_WITH_ARTICLES: Queue, ARTICLE_DATA: Queue):
             bar()
 
 def main():
-    url = 'https://pravoslavie.ru/put/' # основная ссылка
-    
-    LINKS = Queue() # список ссылок для получения списка статей
     PAGES_WITH_ARTICLES = Queue() # список ссылок статей
-    ARTICLE_HTML = Queue() # загруженные страницы
     ARTICLE_DATA = Queue() # список данных
-
-    """ generate_urls(url, LINKS)
-    thread_get_link_article = threading.Thread(
-        target=get_pages_with_articles, args=(LINKS, PAGES_WITH_ARTICLES))
-    thread_get_link_article.run() """
     
-    """ thread_loading = threading.Thread(
-        target=loading, args=(PAGES_WITH_ARTICLES, ARTICLE_HTML))
-    thread_loading.run() """
-    with open('./source/pravoslavie.txt', 'r') as f:
-        for line in f.readlines():
-            line = line.replace('\n', '')
-            PAGES_WITH_ARTICLES.put_nowait(line.replace('\\n', ''))
-        f.close()
+    thread_getLinks = threading.Thread(
+        target=get_links, args=(PAGES_WITH_ARTICLES))
+
     thread_data = threading.Thread(
         target=get_article_data, args=(PAGES_WITH_ARTICLES, ARTICLE_DATA))
-    thread_data.run()
     
+    
+    thread_getLinks.run()
+    thread_data.run()
+
+    thread_getLinks.join()
+    thread_data.join()
+
     with open('./output/dump.csv', 'a', newline='') as f:
         print('Запись в файл')
         recorder = csv.writer(f, delimiter=',')
