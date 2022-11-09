@@ -4,6 +4,64 @@ from bs4 import BeautifulSoup
 import alive_progress
 import csv
 
+from selenium.webdriver.chrome.service import Service
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+
+class Client:
+    def get_data(url):
+        service = Service(executable_path="./driver/chromedriver")
+        options = Options()
+        options.add_argument("--headless")
+        caps = DesiredCapabilities()
+        caps['pageLoadStrategy'] = 'eager'
+        driver = webdriver.Chrome(service=service, options=options, desired_capabilities=caps)
+        driver.get(url)
+
+        try:
+            h1_title = driver.find_element(By.CLASS_NAME, 'block-doc__title').text
+            author = driver.find_element(By.CLASS_NAME, "block-doc__author").find_element(By.TAG_NAME, 'a').text
+            article_published = refinde(driver.find_element(By.CLASS_NAME, 'block-doc__date').text)
+            article_rating = driver.find_element(By.CLASS_NAME, 'block-rating').find_elements(By.CLASS_NAME, 'block-rating__overall')
+            article_comment_count = len(driver.find_elements(By.CLASS_NAME, 'block-comments__item'))
+            data = {
+                'title': h1_title,
+                'author': author,
+                'published': article_published,
+                'rating': article_rating[0].text,
+                'rating-count': article_rating[1].text,
+                'comment-count': article_comment_count
+            }
+        except IndexError:
+            h1_title = driver.find_element(By.CLASS_NAME, 'block-doc__title').text
+            author = driver.find_element(By.CLASS_NAME, "block-doc__author").find_element(By.TAG_NAME, 'a').text
+            article_published = refinde(driver.find_element(By.CLASS_NAME, 'block-doc__date').text)
+            article_comment_count = len(driver.find_elements(By.CLASS_NAME, 'block-comments__item'))
+            data = {
+                'title': 'errData',
+                'author': 'errData',
+                'published': 'errData',
+                'rating': 'N/A',
+                'rating-count': 'N/A',
+                'comment-count': 'errData'
+            }
+        except NoSuchElementException:
+            data = {
+                'title': 'none',
+                'author': 'none',
+                'published': 'none',
+                'rating': 'none',
+                'rating-count': 'none',
+                'comment-count': 'none'
+            }
+        
+        driver.quit()
+        return data
+
+
 def refinde(str):
     s = str.replace('\xa0', ' ')
     return s.replace('&nbsp;', ' ')
@@ -65,42 +123,9 @@ def dowload_articles(link, ARTICLE_HTML: Queue):
             'html': html
             })
 
-def get_article_data(num, data, ARTICLE_DATA: Queue):
-    soup = BeautifulSoup(data['html'], 'lxml')
-    article_title = None
-    article_author = None
-    article_published = None
-    article_rating = None
-    article_comment_count = None
-    if soup.find('h1', class_='block-doc__title') is not None:
-        article_title = soup.find('h1', class_='block-doc__title').text
-    if soup.find('p', class_='block-doc__author') is not None and soup.find('p', class_='block-doc__author').find('a') is not None:
-        article_author = soup.find('p', class_='block-doc__author').find('a').text
-    if soup.find('p', class_='block-doc__date') is not None:
-        article_published = refinde(soup.find('p', class_='block-doc__date').text)
-    """ article_rating = soup.find('div', class_='block-rating').find_all('span', class_='block-rating__overall') """
-    if soup.find_all('div', class_='block-comments__item') is not None:
-        article_comment_count = len(soup.find_all('div', class_='block-comments__item'))
-    
-    ARTICLE_DATA.put_nowait({
-        'number': num,
-        'link': data['link'],
-        'title': article_title,
-        'author': article_author,
-        'date': article_published,
-        'rating': article_rating,
-        'comment-count': article_comment_count
-    })
 
-
-def get_data(ARTICLE_HTML: Queue, ARTICLE_DATA: Queue):
-    print('Собираем данные')
-    with alive_progress.alive_bar(ARTICLE_HTML.qsize()) as bar:
-        for i in range(ARTICLE_HTML.qsize()):
-            while ARTICLE_HTML.empty():
-                time.sleep(0.2)
-            get_article_data(i+1, ARTICLE_HTML.get_nowait(), ARTICLE_DATA)
-            bar()
+def download_article_selenium(link):
+    return Client.get_data(link)
 
 
 def loading(PAGES_WITH_ARTICLES: Queue, ARTICLE_HTML: Queue):
@@ -117,6 +142,34 @@ def loading(PAGES_WITH_ARTICLES: Queue, ARTICLE_HTML: Queue):
             bar()
 
 
+def get_data(ARTICLE_HTML: Queue, ARTICLE_DATA: Queue):
+    print('Собираем данные')
+    with alive_progress.alive_bar(ARTICLE_HTML.qsize()) as bar:
+        for i in range(ARTICLE_HTML.qsize()):
+            while ARTICLE_HTML.empty():
+                time.sleep(0.2)
+            get_article_data(i+1, ARTICLE_HTML.get_nowait(), ARTICLE_DATA)
+            bar()
+
+
+def get_article_data(PAGES_WITH_ARTICLES: Queue, ARTICLE_DATA: Queue):
+    print('собираем данные')
+    with alive_progress.alive_bar(PAGES_WITH_ARTICLES.qsize()) as bar:
+        for i in range(PAGES_WITH_ARTICLES.qsize()):
+            link = PAGES_WITH_ARTICLES.get_nowait()
+            load_data = download_article_selenium(link)
+            ARTICLE_DATA.put_nowait({
+                'number': i+1,
+                'link': link,
+                'title': load_data['title'],
+                'author': load_data['author'],
+                'date': load_data['published'],
+                'rating': load_data['rating'],
+                'rating-count': load_data['rating-count'],
+                'comment-count': load_data['comment-count']
+            })
+            bar()
+
 def main():
     url = 'https://pravoslavie.ru/put/' # основная ссылка
     
@@ -125,17 +178,21 @@ def main():
     ARTICLE_HTML = Queue() # загруженные страницы
     ARTICLE_DATA = Queue() # список данных
 
-    generate_urls(url, LINKS)
+    """ generate_urls(url, LINKS)
     thread_get_link_article = threading.Thread(
         target=get_pages_with_articles, args=(LINKS, PAGES_WITH_ARTICLES))
-    thread_get_link_article.run()
+    thread_get_link_article.run() """
     
-    thread_loading = threading.Thread(
+    """ thread_loading = threading.Thread(
         target=loading, args=(PAGES_WITH_ARTICLES, ARTICLE_HTML))
-    thread_loading.run()
-
+    thread_loading.run() """
+    with open('./source/pravoslavie.txt', 'r') as f:
+        for line in f.readlines():
+            line = line.replace('\n', '')
+            PAGES_WITH_ARTICLES.put_nowait(line.replace('\\n', ''))
+        f.close()
     thread_data = threading.Thread(
-        target=get_data, args=(ARTICLE_HTML, ARTICLE_DATA))
+        target=get_article_data, args=(PAGES_WITH_ARTICLES, ARTICLE_DATA))
     thread_data.run()
     
     with open('./output/dump.csv', 'a', newline='') as f:
@@ -147,6 +204,7 @@ def main():
             "Автор",
             "Дата публикации",
             "рейтинг статьи",
+            "Кол-во голосов",
             "Кол-во комментариев",
             "Ссылка на статью"
         ))
@@ -158,6 +216,7 @@ def main():
                 line['author'],
                 line['date'],
                 line['rating'],
+                line['rating-count'],
                 line['comment-count'],
                 line['link']
             ))
