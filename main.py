@@ -14,8 +14,10 @@ class Client:
     def get_data(url):
         service = Service(executable_path="./driver/chromedriver")
         options = Options()
+        caps = DesiredCapabilities().CHROME
+        caps['pageLoadStrategy'] = "eager"
         options.add_argument("--headless")
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Chrome(service=service, options=options, desired_capabilities=caps)
         driver.get(url)
 
         try:
